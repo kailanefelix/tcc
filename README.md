@@ -1,5 +1,4 @@
 # TCC — Benchmark de Modelos Preditivos
-**Programa Cientista do Meu Estado · Pernambuco**
 
 Previsão do número de beneficiários por município e setor (PROGRAMA) usando séries temporais curtas (2021–2025).
 
@@ -70,7 +69,7 @@ data/
 
 ### Problema 2 — Data leakage via `lag_1` (em avaliação)
 
-**Causa:** com apenas 5 pontos anuais, `lag_1` funciona como oráculo em séries estáveis. DecisionTree apresentou MAPE de 0,03% na Pesca Artesanal com `lag_1` respondendo por 98,4% da feature importance — o modelo apenas repete o ano anterior.
+**Causa:** com apenas 5 pontos anuais, `lag_1` funciona como oráculo em séries estáveis. DecisionTree apresentou MAPE de 0,03% na Pesca Artesanal com `lag_1` respondendo por 98,4% da feature importance. O modelo apenas repete o ano anterior.
 
 **Evidência:**
 
@@ -95,7 +94,7 @@ data/
 - **POR_SETOR > GLOBAL** consistentemente — os 3 programas têm dinâmicas distintas
 - **ETS** é o estatístico mais robusto: 3,78% (Canavieira), 9,14% (Pesca); ETS global foi o pior geral (36,22%)
 - **LightGBM e Random Forest** competitivos com estatísticos quando avaliados corretamente
-- **Regressão Linear** fraca em vários cenários (119% Canavieira, 42% Pesca) — poucos pontos para estimar tendência
+- **Regressão Linear** fraca em vários cenários (119% Canavieira, 42% Pesca), poucos pontos para estimar tendência
 
 ---
 
