@@ -40,7 +40,7 @@ warnings.filterwarnings("ignore")
 # Constantes
 # ---------------------------------------------------------------------------
 ML_FEATURES = ["ANO", "MUNICIPIO_CODE", "PROGRAMA_CODE",
-                "lag_1", "lag_2", "rolling_mean_2", "trend", "ano_rel"]
+                "lag_2", "rolling_mean_2", "trend", "ano_rel"]
 
 FAMILIES = {
     "Estatístico": ["ARIMA", "ETS"],
