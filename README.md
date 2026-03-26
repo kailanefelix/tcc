@@ -37,6 +37,13 @@ data/
 - Primeiros testes manuais de ARIMA, ETS, Random Forest e LightGBM
 - Criação de `preprocessing.py` e `benchmark.py`
 
+### 26/03/2026
+- Confirmado data leakage via `lag_1`: removido de `ML_FEATURES` (Opção A)
+- Reexecução do benchmark sem `lag_1` → resultados salvos em `resultados_benchmark_v3.csv`
+- DecisionTree Pesca: 0,03% → 9,25% (confirmação do leakage — resultado anterior era espúrio)
+- LightGBM Fruticultura: 0,23% → 2,40% / LightGBM Canavieira: 0,65% → 4,27% (ainda competitivo)
+- LightGBM POR_SETOR continua o melhor modelo de ML; ETS POR_SETOR Canavieira segue o melhor geral
+
 ---
 
 ## Problemas e Soluções
@@ -67,7 +74,7 @@ data/
 
 ---
 
-### Problema 2 — Data leakage via `lag_1` (em avaliação)
+### Problema 2 — Data leakage via `lag_1` (resolvido)
 
 **Causa:** com apenas 5 pontos anuais, `lag_1` funciona como oráculo em séries estáveis. DecisionTree apresentou MAPE de 0,03% na Pesca Artesanal com `lag_1` respondendo por 98,4% da feature importance. O modelo apenas repete o ano anterior.
 
@@ -80,28 +87,44 @@ data/
 | Ipojuca   | 186       | 89,31    | 96,69     | 98    |
 | Igarassu  | 511       | 443,25   | 67,75     | 477   |
 
-**Opções em avaliação:**
-- **A (preferida):** remover `lag_1`, manter `lag_2`, `rolling_mean_2`, `trend`, `ano_rel`
-- **B:** manter `lag_1` e documentar como limitação explícita (ameaça à validade)
-- **C:** leave-one-out temporal (prever 2023 com dados até 2022, prever 2024 com dados até 2023)
+**Solução (Opção A):** `lag_1` removido de `ML_FEATURES` em `benchmark.py`. Features de ML passam a ser: `lag_2`, `rolling_mean_2`, `trend`, `ano_rel`, `ANO`, `MUNICIPIO_CODE`, `PROGRAMA_CODE`.
 
 ---
 
-## Achados Preliminares
+## Resultados Definitivos (v3 — sem `lag_1`)
 
-> Sujeitos à revisão do Problema 2.
+> `resultados_benchmark_v3.csv` · features: `lag_2`, `rolling_mean_2`, `trend`, `ano_rel`
 
-- **POR_SETOR > GLOBAL** consistentemente — os 3 programas têm dinâmicas distintas
-- **ETS** é o estatístico mais robusto: 3,78% (Canavieira), 9,14% (Pesca); ETS global foi o pior geral (36,22%)
-- **LightGBM e Random Forest** competitivos com estatísticos quando avaliados corretamente
-- **Regressão Linear** fraca em vários cenários (119% Canavieira, 42% Pesca), poucos pontos para estimar tendência
+| Modelo            | Modo      | Programa              | MAPE%  |
+|-------------------|-----------|-----------------------|--------|
+| LightGBM          | POR_SETOR | Fruticultura Irrigada | 2,40%  |
+| ETS (Holt Linear) | POR_SETOR | Zona Canavieira       | 3,78%  |
+| ARIMA             | GLOBAL    | Todos                 | 4,06%  |
+| ARIMA             | POR_SETOR | Fruticultura Irrigada | 4,31%  |
+| LightGBM          | POR_SETOR | Zona Canavieira       | 4,27%  |
+| ETS (Holt Linear) | POR_SETOR | Pesca Artesanal       | 9,14%  |
+| DecisionTree      | POR_SETOR | Pesca Artesanal       | 9,25%  |
+| ARIMA             | POR_SETOR | Pesca Artesanal       | 9,32%  |
+| LinearRegression  | POR_SETOR | Fruticultura Irrigada | 10,12% |
+| LightGBM          | GLOBAL    | Todos                 | 11,34% |
+
+**Melhores por família:**
+- Estatístico: ETS POR_SETOR — 3,78% (Zona Canavieira)
+- ML Moderno: LightGBM POR_SETOR — 2,40% (Fruticultura Irrigada)
+- ML Clássico: DecisionTree POR_SETOR — 9,25% (Pesca Artesanal)
+
+**Achados consolidados:**
+- **POR_SETOR > GLOBAL** consistentemente — dinâmicas distintas entre programas justificam modelos separados
+- **LightGBM POR_SETOR** é competitivo ou superior aos modelos estatísticos sem leakage
+- **DecisionTree** sem `lag_1` desempenho cai para 9–31% — dependia quase integralmente do leakage
+- **Regressão Linear** segue fraca (41–105% POR_SETOR), insuficiência de pontos para estimar tendência linear
+- **ETS global** continua o pior resultado (36,22%) — agregação perde informação setorial
 
 ---
 
 ## Próximos Passos
 
-- [ ] Decidir tratamento do `lag_1` (Opções A, B ou C)
-- [ ] Ajustar `preprocessing.py` e `benchmark.py`
-- [ ] Reexecutar benchmark e registrar resultados definitivos
+- [x] Decidir tratamento do `lag_1` → Opção A (removido)
+- [x] Reexecutar benchmark e registrar resultados definitivos (v3)
 - [ ] Visualização comparativa no `modeling.ipynb`
 - [ ] Redigir seção de metodologia do TCC
