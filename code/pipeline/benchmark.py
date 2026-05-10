@@ -40,7 +40,9 @@ warnings.filterwarnings("ignore")
 # Constantes
 # ---------------------------------------------------------------------------
 ML_FEATURES = ["ANO", "MUNICIPIO_CODE", "PROGRAMA_CODE",
-                "lag_2", "rolling_mean_2", "trend", "ano_rel"]
+               "lag_2", "lag_3", "rolling_mean_2", "trend", "ano_rel",
+               "growth_rate", "zero_historico",
+               "programa_total_lag2", "share_municipio"]
 
 FAMILIES = {
     "Estatístico": ["ARIMA", "ETS"],
@@ -155,6 +157,8 @@ def run_stat_models(df_full: pd.DataFrame, test_year: int,
     """
     results = {}
 
+    nan_metrics = {"MAE": np.nan, "RMSE": np.nan, "MAPE%": np.nan}
+
     if scope == "GLOBAL":
         # Série agregada de todos os programas juntos
         series = (df_full.groupby(YEAR_COL)[TARGET].sum()
@@ -166,7 +170,10 @@ def run_stat_models(df_full: pd.DataFrame, test_year: int,
 
         for name in FAMILIES["Estatístico"]:
             pred = _fit_stat_model(series, name)
-            err  = evaluate(np.array([real]), np.array([pred]))
+            if np.isnan(pred):
+                err = nan_metrics
+            else:
+                err = evaluate(np.array([real]), np.array([pred]))
             results[name] = {**err, "y_true": real, "y_pred": pred,
                              "scope": "GLOBAL", "programa": "TODOS"}
 
@@ -181,7 +188,10 @@ def run_stat_models(df_full: pd.DataFrame, test_year: int,
 
         for name in FAMILIES["Estatístico"]:
             pred = _fit_stat_model(series, name)
-            err  = evaluate(np.array([real]), np.array([pred]))
+            if np.isnan(pred):
+                err = nan_metrics
+            else:
+                err = evaluate(np.array([real]), np.array([pred]))
             results[name] = {**err, "y_true": real, "y_pred": pred,
                              "scope": "POR_SETOR", "programa": prog}
 
@@ -193,12 +203,12 @@ def run_stat_models(df_full: pd.DataFrame, test_year: int,
 # ---------------------------------------------------------------------------
 
 def _get_ml_splits(df_ml: pd.DataFrame, test_year: int):
-    """Separa treino/teste garantindo que lag_1 existe no split de teste."""
+    """Separa treino/teste. Remove linhas onde a série está vazia (lag_2 e target = 0)."""
     train = df_ml[df_ml[YEAR_COL] < test_year]
     test  = df_ml[df_ml[YEAR_COL] == test_year]
 
-    # Remove linhas de teste onde lag_1 = 0 e real = 0 (série vazia)
-    test = test[~((test["lag_1"] == 0) & (test[TARGET] == 0))]
+    # Remove linhas de teste onde lag_2 = 0 e real = 0 (série vazia)
+    test = test[~((test["lag_2"] == 0) & (test[TARGET] == 0))]
 
     feats = [f for f in ML_FEATURES if f in df_ml.columns]
     X_train, y_train = train[feats], train[TARGET]
@@ -243,7 +253,7 @@ def run_ml_models(df_ml: pd.DataFrame, test_year: int,
 
     # Guarda o df de teste completo para agregar depois
     test_df = subset[subset[YEAR_COL] == test_year].copy()
-    test_df = test_df[~((test_df["lag_1"] == 0) & (test_df[TARGET] == 0))]
+    test_df = test_df[~((test_df["lag_2"] == 0) & (test_df[TARGET] == 0))]
 
     results = {}
     ml_model_names = FAMILIES["ML Clássico"] + FAMILIES["ML Moderno"]
@@ -274,25 +284,15 @@ def run_ml_models(df_ml: pd.DataFrame, test_year: int,
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
-def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
+def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
+                     programas: list, test_year: int) -> pd.DataFrame:
     """
-    Executa o pipeline completo de benchmark.
+    Executa todos os modelos para um único fold (test_year).
 
-    Retorna um DataFrame com uma linha por (modelo, modo, programa).
+    df_full_fold : df_full já filtrado para anos <= test_year
+    df_ml        : df_ml completo — o split treino/teste é feito internamente
+                   por test_year em _get_ml_splits
     """
-    data = load_and_preprocess(file_path)
-    df_full     = data["df_full"]
-    df_ml       = data["df_ml"]
-    programas   = data["programas"]
-    anos        = data["anos"]
-
-    if test_year is None:
-        test_year = max(anos)
-
-    print(f"\n[benchmark] Ano de teste: {test_year}")
-    print(f"[benchmark] Programas   : {programas}")
-    print(f"[benchmark] Anos treino : {[a for a in anos if a < test_year]}\n")
-
     all_results = []
 
     # ---- MODO GLOBAL --------------------------------------------------------
@@ -300,7 +300,7 @@ def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
     print("MODO GLOBAL (todos os dados)")
     print("=" * 60)
 
-    stat_global = run_stat_models(df_full, test_year, scope="GLOBAL")
+    stat_global = run_stat_models(df_full_fold, test_year, scope="GLOBAL")
     for model_name, metrics in stat_global.items():
         row = {"modelo": model_name, "familia": "Estatístico",
                "modo": "GLOBAL", **metrics}
@@ -327,7 +327,7 @@ def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
     for prog in programas:
         print(f"\n  >> {prog}")
 
-        stat_prog = run_stat_models(df_full, test_year,
+        stat_prog = run_stat_models(df_full_fold, test_year,
                                     scope="POR_SETOR", programa=prog)
         for model_name, metrics in stat_prog.items():
             row = {"modelo": model_name, "familia": "Estatístico",
@@ -348,13 +348,100 @@ def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
                   f"RMSE={metrics.get('RMSE','N/A'):>10}  "
                   f"MAPE%={metrics.get('MAPE%','N/A'):>6}")
 
-    # ---- Consolidação -------------------------------------------------------
-    df_results = pd.DataFrame(all_results)
-    return df_results
+    return pd.DataFrame(all_results)
+
+
+def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
+    """
+    Executa o pipeline completo de benchmark para um único ano de teste.
+
+    Retorna um DataFrame com uma linha por (modelo, modo, programa).
+    """
+    data = load_and_preprocess(file_path)
+    df_full   = data["df_full"]
+    df_ml     = data["df_ml"]
+    programas = data["programas"]
+    anos      = data["anos"]
+
+    if test_year is None:
+        test_year = max(anos)
+
+    print(f"\n[benchmark] Ano de teste: {test_year}")
+    print(f"[benchmark] Programas   : {programas}")
+    print(f"[benchmark] Anos treino : {[a for a in anos if a < test_year]}\n")
+
+    df_full_fold = df_full[df_full[YEAR_COL] <= test_year].copy()
+    return _run_single_fold(df_full_fold, df_ml, programas, test_year)
 
 
 # ---------------------------------------------------------------------------
-# Relatório / Tabela resumo
+# Walk-forward cross-validation
+# ---------------------------------------------------------------------------
+
+def run_walkforward_cv(file_path: str,
+                       min_train_years: int = 2) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Walk-forward cross-validation sobre todos os modelos do benchmark.
+
+    Para cada ano t com pelo menos min_train_years de treino antes dele,
+    treina em [t_min, ..., t-1] e avalia em t. Os modelos estatísticos retornam
+    NaN automaticamente quando a série de treino é curta demais (< 3 pontos).
+
+    Parâmetros
+    ----------
+    file_path       : caminho para o arquivo .xlsx
+    min_train_years : mínimo de anos de treino para incluir um fold (padrão: 2)
+
+    Retorna
+    -------
+    df_folds   – resultados brutos por fold (inclui colunas "fold" e "n_train")
+    df_summary – MAPE médio, desvio padrão e nº de folds válidos por
+                 (modelo, familia, modo, programa)
+    """
+    data = load_and_preprocess(file_path)
+    df_full   = data["df_full"]
+    df_ml     = data["df_ml"]
+    programas = data["programas"]
+    anos      = data["anos"]
+
+    test_years = [a for i, a in enumerate(anos) if i >= min_train_years]
+
+    print(f"\n[cv] Walk-forward CV  |  min_train_years={min_train_years}")
+    print(f"[cv] Folds ({len(test_years)}): anos de teste = {test_years}\n")
+
+    fold_dfs = []
+    for test_year in test_years:
+        n_train = anos.index(test_year)
+        train_anos = anos[:n_train]
+        print(f"\n{'#'*60}")
+        print(f"# FOLD  test_year={test_year}  |  treino: {train_anos}")
+        print(f"{'#'*60}")
+
+        df_full_fold = df_full[df_full[YEAR_COL] <= test_year].copy()
+        fold_df = _run_single_fold(df_full_fold, df_ml, programas, test_year)
+        fold_df["fold"]    = test_year
+        fold_df["n_train"] = n_train
+        fold_dfs.append(fold_df)
+
+    df_folds = pd.concat(fold_dfs, ignore_index=True)
+
+    # Resumo agregado por (modelo, familia, modo, programa)
+    grp_cols = ["modelo", "familia", "modo", "programa"]
+    df_summary = (
+        df_folds
+        .dropna(subset=["MAPE%"])
+        .groupby(grp_cols, sort=False)["MAPE%"]
+        .agg(mape_mean="mean", mape_std="std", n_folds="count")
+        .reset_index()
+        .sort_values(["familia", "mape_mean"])
+        .reset_index(drop=True)
+    )
+
+    return df_folds, df_summary
+
+
+# ---------------------------------------------------------------------------
+# Relatórios
 # ---------------------------------------------------------------------------
 
 def print_summary(df_results: pd.DataFrame):
@@ -378,22 +465,53 @@ def print_summary(df_results: pd.DataFrame):
               f"(modo={best['modo']}, MAPE%={best['MAPE%']:.2f})")
 
 
+def print_cv_summary(df_summary: pd.DataFrame):
+    print("\n" + "=" * 80)
+    print("RESUMO WALK-FORWARD CV  (MAPE médio ± desvio padrão entre folds)")
+    print("=" * 80)
+    print(df_summary.to_string(index=False, float_format="%.2f"))
+
+    print("\n--- Melhor modelo por família (MAPE médio) ---")
+    for familia in df_summary["familia"].unique():
+        sub = df_summary[df_summary["familia"] == familia]
+        best = sub.loc[sub["mape_mean"].idxmin()]
+        std_str = f"±{best['mape_std']:.2f}" if not np.isnan(best["mape_std"]) else "±n/a"
+        print(f"  {familia:15s}: {best['modelo']} "
+              f"(modo={best['modo']}, programa={best['programa']}, "
+              f"MAPE={best['mape_mean']:.2f}% {std_str}, folds={int(best['n_folds'])})")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark de modelos – TCC")
-    parser.add_argument("--file",      type=str, required=True,
+    parser.add_argument("--file",            type=str, required=True,
                         help="Caminho para o arquivo .xlsx")
-    parser.add_argument("--test-year", type=int, default=None,
-                        help="Ano de teste (padrão: último ano do dataset)")
-    parser.add_argument("--output",    type=str, default="resultados_benchmark.csv",
-                        help="Arquivo CSV de saída com os resultados")
+    parser.add_argument("--test-year",       type=int, default=None,
+                        help="Ano de teste para benchmark único (padrão: último ano)")
+    parser.add_argument("--output",          type=str, default="resultados_benchmark.csv",
+                        help="Arquivo CSV de saída")
+    parser.add_argument("--cv",              action="store_true",
+                        help="Executa walk-forward cross-validation")
+    parser.add_argument("--min-train-years", type=int, default=2,
+                        help="Mínimo de anos de treino nos folds do CV (padrão: 2)")
     args = parser.parse_args()
 
-    df_results = run_benchmark(args.file, test_year=args.test_year)
-    print_summary(df_results)
+    if args.cv:
+        df_folds, df_summary = run_walkforward_cv(
+            args.file, min_train_years=args.min_train_years
+        )
+        print_cv_summary(df_summary)
 
-    df_results.to_csv(args.output, index=False)
-    print(f"\n[benchmark] Resultados salvos em: {args.output}")
+        stem = args.output.replace(".csv", "")
+        df_folds.to_csv(f"{stem}_folds.csv", index=False)
+        df_summary.to_csv(f"{stem}_summary.csv", index=False)
+        print(f"\n[cv] Resultados por fold salvos em : {stem}_folds.csv")
+        print(f"[cv] Resumo salvo em               : {stem}_summary.csv")
+    else:
+        df_results = run_benchmark(args.file, test_year=args.test_year)
+        print_summary(df_results)
+        df_results.to_csv(args.output, index=False)
+        print(f"\n[benchmark] Resultados salvos em: {args.output}")
