@@ -5,7 +5,7 @@ Pipeline de benchmark de modelos para o TCC.
 Estrutura:
   - Família 1 – Estatísticos      : ARIMA, ETS
   - Família 2 – ML Clássico       : Regressão Linear, Árvore de Decisão
-  - Família 3 – ML Moderno        : Random Forest, LightGBM
+  - Família 3 – ML baseado em Ensemble : Random Forest, LightGBM
 
 Cada modelo é avaliado em dois modos de treinamento:
   a) GLOBAL    – treinado com todos os dados de todos os municípios/programas
@@ -47,7 +47,7 @@ ML_FEATURES = ["ANO", "MUNICIPIO_CODE", "PROGRAMA_CODE",
 FAMILIES = {
     "Estatístico": ["ARIMA", "ETS", "ETS_notrend"],  # ETS_notrend: testa sem trend em séries voláteis
     "ML Clássico":  ["LinearRegression", "DecisionTree"],
-    "ML Moderno":   ["RandomForest", "LightGBM"],
+    "ML baseado em Ensemble": ["RandomForest", "LightGBM"],
     "Baseline":     ["Naive"],  # baseline: repete lag_2 — referência mínima de aprendizado
 }
 
@@ -229,17 +229,19 @@ def _get_ml_splits(df_ml: pd.DataFrame, test_year: int):
 
 
 def _get_ml_models() -> dict:
+    """
+    Instancia os modelos de ML. Usa _ML_BEST_PARAMS se disponível
+    (preenchido por run_grid_search), caso contrário _ML_DEFAULT_PARAMS.
+    """
+    rf_params   = _ML_BEST_PARAMS.get("RandomForest",
+                                       _ML_DEFAULT_PARAMS.get("RandomForest", {}))
+    lgbm_params = _ML_BEST_PARAMS.get("LightGBM",
+                                       _ML_DEFAULT_PARAMS.get("LightGBM", {}))
     return {
         "LinearRegression": LinearRegression(),
         "DecisionTree":     DecisionTreeRegressor(max_depth=4, random_state=42),
-        "RandomForest":     RandomForestRegressor(
-                                n_estimators=200, max_depth=6,
-                                min_samples_leaf=3,  # regularização leve: evita overfitting em séries curtas
-                                random_state=42, n_jobs=-1
-                            ),
-        "LightGBM":         lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05,
-                                               max_depth=4, random_state=42,
-                                               verbose=-1),
+        "RandomForest":     RandomForestRegressor(random_state=42, n_jobs=-1, **rf_params),
+        "LightGBM":         lgb.LGBMRegressor(random_state=42, verbose=-1, **lgbm_params),
     }
 
 
@@ -271,7 +273,7 @@ def run_ml_models(df_ml: pd.DataFrame, test_year: int,
     test_df = test_df[~((test_df["lag_2"] == 0) & (test_df[TARGET] == 0))]
 
     results = {}
-    ml_model_names = FAMILIES["ML Clássico"] + FAMILIES["ML Moderno"]
+    ml_model_names = FAMILIES["ML Clássico"] + FAMILIES["ML baseado em Ensemble"]
 
     for name, model in _get_ml_models().items():
         if name not in ml_model_names:
@@ -358,7 +360,7 @@ def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
     ml_global = run_ml_models(df_ml, test_year, scope="GLOBAL")
     for model_name, metrics in ml_global.items():
         familia = ("ML Clássico" if model_name in FAMILIES["ML Clássico"]
-                   else "ML Moderno")
+                   else "ML baseado em Ensemble")
         row = {"modelo": model_name, "familia": familia,
                "modo": "GLOBAL", **metrics}
         all_results.append(row)
@@ -395,7 +397,7 @@ def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
                                 scope="POR_SETOR", programa=prog)
         for model_name, metrics in ml_prog.items():
             familia = ("ML Clássico" if model_name in FAMILIES["ML Clássico"]
-                       else "ML Moderno")
+                       else "ML baseado em Ensemble")
             row = {"modelo": model_name, "familia": familia,
                    "modo": "POR_SETOR", **metrics}
             all_results.append(row)
@@ -512,6 +514,108 @@ def run_walkforward_cv(file_path: str,
 
 
 # ---------------------------------------------------------------------------
+# Grid search de hiperparâmetros (Random Forest e LightGBM)
+# ---------------------------------------------------------------------------
+
+_ML_DEFAULT_PARAMS: dict = {
+    "RandomForest": {"n_estimators": 200, "max_depth": 6, "min_samples_leaf": 3},
+    "LightGBM":     {"n_estimators": 200, "learning_rate": 0.05, "max_depth": 4},
+}
+
+_ML_BEST_PARAMS: dict = {}  # preenchido por run_grid_search()
+
+_RF_GRID = [
+    {"n_estimators": n, "max_depth": d, "min_samples_leaf": l}
+    for n in [100, 200] for d in [4, 6, 8] for l in [2, 3, 5]
+]  # 18 combinações
+
+_LGBM_GRID = [
+    {"n_estimators": n, "max_depth": d, "learning_rate": lr}
+    for n in [100, 200] for d in [3, 4, 6] for lr in [0.05, 0.1]
+]  # 12 combinações
+
+
+def run_grid_search(file_path: str, min_train_years: int = 2) -> dict:
+    """
+    Grid search de hiperparâmetros para RandomForest e LightGBM usando
+    walk-forward CV (POR_SETOR, média de MAPE sobre todos os folds e programas).
+
+    Atualiza _ML_BEST_PARAMS globalmente e retorna o dicionário de melhores params.
+
+    Parâmetros
+    ----------
+    file_path       : caminho para o arquivo .xlsx
+    min_train_years : mínimo de anos de treino por fold (padrão: 2)
+    """
+    global _ML_BEST_PARAMS
+
+    data = load_and_preprocess(file_path)
+    df_ml     = data["df_ml"]
+    programas = data["programas"]
+    anos      = data["anos"]
+    test_years = [a for i, a in enumerate(anos) if i >= min_train_years]
+
+    grids = {
+        "RandomForest": _RF_GRID,
+        "LightGBM":     _LGBM_GRID,
+    }
+    model_factories = {
+        "RandomForest": lambda p: RandomForestRegressor(
+            random_state=42, n_jobs=-1, **p
+        ),
+        "LightGBM": lambda p: lgb.LGBMRegressor(
+            random_state=42, verbose=-1, **p
+        ),
+    }
+
+    best_params: dict = {}
+
+    for model_name, param_grid in grids.items():
+        n_combos = len(param_grid)
+        print(f"\n[gridsearch] {model_name} — {n_combos} combinações × "
+              f"{len(test_years)} folds × {len(programas)} programas")
+
+        best_mape = float("inf")
+        best_p: dict = _ML_DEFAULT_PARAMS[model_name]
+
+        for params in param_grid:
+            model = model_factories[model_name](params)
+            mapes: list[float] = []
+
+            for test_year in test_years:
+                df_ml_fold = df_ml[df_ml[YEAR_COL] <= test_year].copy()
+                df_ml_fold = _add_context_features(df_ml_fold)
+
+                for prog in programas:
+                    subset = df_ml_fold[df_ml_fold["PROGRAMA"] == prog]
+                    X_train, y_train, X_test, y_test = _get_ml_splits(subset, test_year)
+                    if len(X_train) == 0 or len(X_test) == 0:
+                        continue
+                    test_df = subset[subset[YEAR_COL] == test_year].copy()
+                    test_df = test_df[~((test_df["lag_2"] == 0) & (test_df[TARGET] == 0))]
+                    try:
+                        model.fit(X_train, y_train)
+                        preds = model.predict(X_test)
+                        err = evaluate_aggregated(y_test.values, preds, test_df, prog)
+                        if not np.isnan(err["MAPE%"]):
+                            mapes.append(err["MAPE%"])
+                    except Exception:
+                        pass
+
+            mean_mape = float(np.mean(mapes)) if mapes else float("inf")
+            if mean_mape < best_mape:
+                best_mape = mean_mape
+                best_p = params
+            print(f"  {params}  ->  CV MAPE medio = {mean_mape:.2f}%")
+
+        print(f"\n  >> Melhor {model_name}: {best_p}  (CV MAPE = {best_mape:.2f}%)")
+        best_params[model_name] = best_p
+
+    _ML_BEST_PARAMS.update(best_params)
+    return best_params
+
+
+# ---------------------------------------------------------------------------
 # Relatórios
 # ---------------------------------------------------------------------------
 
@@ -566,9 +670,17 @@ if __name__ == "__main__":
                         help="Arquivo CSV de saída")
     parser.add_argument("--cv",              action="store_true",
                         help="Executa walk-forward cross-validation")
+    parser.add_argument("--gridsearch",      action="store_true",
+                        help="Roda grid search antes do benchmark e usa melhores params")
     parser.add_argument("--min-train-years", type=int, default=2,
                         help="Mínimo de anos de treino nos folds do CV (padrão: 2)")
     args = parser.parse_args()
+
+    if args.gridsearch:
+        best = run_grid_search(args.file, min_train_years=args.min_train_years)
+        print("\n[gridsearch] Parâmetros selecionados:")
+        for name, params in best.items():
+            print(f"  {name}: {params}")
 
     if args.cv:
         df_folds, df_summary = run_walkforward_cv(
