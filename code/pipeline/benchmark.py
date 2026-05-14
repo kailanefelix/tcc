@@ -31,7 +31,7 @@ import lightgbm as lgb
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 
-from preprocessing import load_and_preprocess, TARGET, YEAR_COL
+from preprocessing import load_and_preprocess, _add_context_features, TARGET, YEAR_COL
 
 warnings.filterwarnings("ignore")
 
@@ -45,9 +45,10 @@ ML_FEATURES = ["ANO", "MUNICIPIO_CODE", "PROGRAMA_CODE",
                "programa_total_lag2", "share_municipio"]
 
 FAMILIES = {
-    "Estatístico": ["ARIMA", "ETS"],
+    "Estatístico": ["ARIMA", "ETS", "ETS_notrend"],  # ETS_notrend: testa sem trend em séries voláteis
     "ML Clássico":  ["LinearRegression", "DecisionTree"],
     "ML Moderno":   ["RandomForest", "LightGBM"],
+    "Baseline":     ["Naive"],  # baseline: repete lag_2 — referência mínima de aprendizado
 }
 
 
@@ -144,6 +145,17 @@ def _fit_stat_model(series: pd.Series, model_name: str) -> float:
         except Exception:
             return np.nan
 
+    elif model_name == "ETS_notrend":
+        # ETS sem componente de tendência — avalia se trend=None reduz erro em séries voláteis
+        try:
+            m = ExponentialSmoothing(
+                train, trend=None, seasonal=None,
+                initialization_method="estimated"
+            ).fit()
+            return float(m.forecast(1).iloc[0])
+        except Exception:
+            return np.nan
+
     return np.nan
 
 
@@ -220,8 +232,11 @@ def _get_ml_models() -> dict:
     return {
         "LinearRegression": LinearRegression(),
         "DecisionTree":     DecisionTreeRegressor(max_depth=4, random_state=42),
-        "RandomForest":     RandomForestRegressor(n_estimators=200, max_depth=6,
-                                                  random_state=42, n_jobs=-1),
+        "RandomForest":     RandomForestRegressor(
+                                n_estimators=200, max_depth=6,
+                                min_samples_leaf=3,  # regularização leve: evita overfitting em séries curtas
+                                random_state=42, n_jobs=-1
+                            ),
         "LightGBM":         lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05,
                                                max_depth=4, random_state=42,
                                                verbose=-1),
@@ -281,6 +296,38 @@ def run_ml_models(df_ml: pd.DataFrame, test_year: int,
 
 
 # ---------------------------------------------------------------------------
+# Modelo baseline
+# ---------------------------------------------------------------------------
+
+def run_naive_model(df_ml: pd.DataFrame, test_year: int,
+                    scope: str = "GLOBAL", programa: str | None = None) -> dict:
+    """
+    Baseline naïve: previsão = lag_2 (valor de t-2).
+    Serve como referência mínima — modelos úteis devem superar esse baseline.
+    Usa evaluate_aggregated para garantir comparabilidade com os demais modelos.
+    """
+    prog_label = programa or "TODOS"
+
+    if scope == "GLOBAL":
+        subset = df_ml
+    else:
+        subset = df_ml[df_ml["PROGRAMA"] == programa]
+
+    # Mesmo filtro de linhas vazias aplicado pelos modelos de ML
+    test_df = subset[subset[YEAR_COL] == test_year].copy()
+    test_df = test_df[~((test_df["lag_2"] == 0) & (test_df[TARGET] == 0))]
+
+    if test_df.empty:
+        return {}
+
+    y_true = test_df[TARGET].values
+    y_pred = test_df["lag_2"].values  # previsão naïve: repete o valor de t-2
+
+    err = evaluate_aggregated(y_true, y_pred, test_df, prog_label)
+    return {"Naive": {**err, "scope": scope, "programa": prog_label}}
+
+
+# ---------------------------------------------------------------------------
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
@@ -290,8 +337,8 @@ def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
     Executa todos os modelos para um único fold (test_year).
 
     df_full_fold : df_full já filtrado para anos <= test_year
-    df_ml        : df_ml completo — o split treino/teste é feito internamente
-                   por test_year em _get_ml_splits
+    df_ml        : df_ml filtrado para anos <= test_year e com context features
+                   recalculadas sem dados futuros (fix: leakage residual no CV)
     """
     all_results = []
 
@@ -314,6 +361,14 @@ def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
                    else "ML Moderno")
         row = {"modelo": model_name, "familia": familia,
                "modo": "GLOBAL", **metrics}
+        all_results.append(row)
+        print(f"  {model_name:20s} MAE={metrics.get('MAE','N/A'):>10}  "
+              f"RMSE={metrics.get('RMSE','N/A'):>10}  "
+              f"MAPE%={metrics.get('MAPE%','N/A'):>6}")
+
+    # Baseline naïve — GLOBAL
+    for model_name, metrics in run_naive_model(df_ml, test_year, scope="GLOBAL").items():
+        row = {"modelo": model_name, "familia": "Baseline", "modo": "GLOBAL", **metrics}
         all_results.append(row)
         print(f"  {model_name:20s} MAE={metrics.get('MAE','N/A'):>10}  "
               f"RMSE={metrics.get('RMSE','N/A'):>10}  "
@@ -348,6 +403,16 @@ def _run_single_fold(df_full_fold: pd.DataFrame, df_ml: pd.DataFrame,
                   f"RMSE={metrics.get('RMSE','N/A'):>10}  "
                   f"MAPE%={metrics.get('MAPE%','N/A'):>6}")
 
+        # Baseline naïve — POR_SETOR
+        for model_name, metrics in run_naive_model(
+                df_ml, test_year, scope="POR_SETOR", programa=prog).items():
+            row = {"modelo": model_name, "familia": "Baseline",
+                   "modo": "POR_SETOR", **metrics}
+            all_results.append(row)
+            print(f"     {model_name:20s} MAE={metrics.get('MAE','N/A'):>10}  "
+                  f"RMSE={metrics.get('RMSE','N/A'):>10}  "
+                  f"MAPE%={metrics.get('MAPE%','N/A'):>6}")
+
     return pd.DataFrame(all_results)
 
 
@@ -371,7 +436,10 @@ def run_benchmark(file_path: str, test_year: int | None = None) -> pd.DataFrame:
     print(f"[benchmark] Anos treino : {[a for a in anos if a < test_year]}\n")
 
     df_full_fold = df_full[df_full[YEAR_COL] <= test_year].copy()
-    return _run_single_fold(df_full_fold, df_ml, programas, test_year)
+    # fix: recalcula context features sem dados futuros (consistência com o CV)
+    df_ml_fold = df_ml[df_ml[YEAR_COL] <= test_year].copy()
+    df_ml_fold = _add_context_features(df_ml_fold)
+    return _run_single_fold(df_full_fold, df_ml_fold, programas, test_year)
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +486,10 @@ def run_walkforward_cv(file_path: str,
         print(f"{'#'*60}")
 
         df_full_fold = df_full[df_full[YEAR_COL] <= test_year].copy()
-        fold_df = _run_single_fold(df_full_fold, df_ml, programas, test_year)
+        # fix: recalcula context features sem dados futuros (leakage residual no CV)
+        df_ml_fold = df_ml[df_ml[YEAR_COL] <= test_year].copy()
+        df_ml_fold = _add_context_features(df_ml_fold)
+        fold_df = _run_single_fold(df_full_fold, df_ml_fold, programas, test_year)
         fold_df["fold"]    = test_year
         fold_df["n_train"] = n_train
         fold_dfs.append(fold_df)

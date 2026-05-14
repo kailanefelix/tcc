@@ -64,6 +64,22 @@ data/
   - CV do RandomForest: Fruticultura 9,09% → 7,83%, Pesca 10,85% → 9,91% (melhora consistente, variância persiste)
   - Resultados salvos em `resultados_benchmark_v5.csv` e `resultados_cv_v5_*.csv`
 
+### 14/05/2026
+- **Fix leakage residual no CV (crítico):** `_add_context_features` calculava `programa_total_lag2`
+  e `share_municipio` sobre o `df_ml` completo (todos os anos). Em folds com test_year=2023 ou 2024,
+  as linhas de treino tinham essas features contaminadas com dados de anos futuros.
+  Correção: em `run_walkforward_cv` e `run_benchmark`, `df_ml` é cortado para `ANO <= test_year`
+  e `_add_context_features` é recalculada sobre o subconjunto antes de cada fold.
+  `_add_context_features` importada explicitamente de `preprocessing.py`.
+- **Modelo naïve adicionado (família "Baseline"):** previsão = `lag_2` (valor de t-2).
+  Referência mínima para avaliar se os modelos aprendem algo além de repetir o penúltimo valor.
+  Resultados no fold 2025: Pesca 2,13% / Fruticultura 3,12% — vários modelos ML ficam abaixo do baseline no CV.
+- **ETS sem tendência adicionado (`ETS_notrend`):** `trend=None` no Holt-Winters.
+  Resultado fold 2025: GLOBAL 3,13% (melhor geral), Pesca 4,77%, Canavieira 6,20% — supera ETS com trend em todos os casos.
+- **RandomForest regularizado:** `min_samples_leaf=3` adicionado para reduzir overfitting em séries curtas.
+  Efeito no fold 2025: Fruticultura 2,30% → 15,28% (piora no fold único mas melhora esperada no CV).
+- Resultados salvos em `resultados_benchmark_v6.csv` e `resultados_cv_v6_*.csv`
+
 ---
 
 ## Problemas e Soluções
