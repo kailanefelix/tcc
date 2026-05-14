@@ -1,0 +1,504 @@
+\documentclass[12pt, a4paper]{article}
+
+% ─── Pacotes ───────────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{indentfirst}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{makecell}
+
+% ─── Layout ────────────────────────────────────────────────────────────────────
+\geometry{
+  top=3cm, bottom=2cm,
+  left=3cm, right=2cm
+}
+\setstretch{1.5}
+\setlength{\parindent}{1.25cm}
+
+% ─── Metadados do hyperref ──────────────────────────────────────────────────────
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue,
+  pdftitle={Benchmark de Modelos Preditivos para Séries Temporais Curtas},
+  pdfauthor={Kailane Eduarda Felix da Silva},
+}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ─── Capa ──────────────────────────────────────────────────────────────────────
+\begin{titlepage}
+  \centering
+  \vspace*{1cm}
+
+  {\large \textbf{UNIVERSIDADE FEDERAL DE PERNAMBUCO}} \\[0.3cm]
+  {\large Centro de Informática} \\[0.3cm]
+  {\large Bacharelado em Ciência da Computação} \\
+
+  \vspace{3cm}
+
+  {\Large \textbf{Benchmark de Modelos Preditivos para Séries Temporais Curtas: um estudo aplicado a programas rurais em Pernambuco}} \\
+
+  \vspace{3cm}
+
+  {\large Kailane Eduarda Felix da Silva} \\
+
+  \vfill
+
+  {\large Recife, \the\year}
+\end{titlepage}
+
+% ─── Resumo ────────────────────────────────────────────────────────────────────
+\newpage
+\begin{abstract}
+\noindent
+
+\end{abstract}
+
+\vspace{0.5cm}
+\noindent\textbf{Palavras-chave:} séries temporais, previsão de demanda,
+ARIMA, Random Forest, LightGBM, walk-forward cross-validation,
+políticas públicas.
+
+% ─── Sumário ───────────────────────────────────────────────────────────────────
+\newpage
+\tableofcontents
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Introdução}
+\label{sec:introducao}
+
+A capacidade de prever com antecedência o número de beneficiários de programas
+de apoio rural é fundamental para o planejamento e alocação eficiente de recursos
+públicos. No entanto, dados históricos em granularidade municipal costumam
+abranger poucos anos, impondo restrições severas ao treinamento de modelos de
+aprendizado de máquina.
+
+Este trabalho propõe um benchmark sistemático de modelos preditivos aplicados
+a séries temporais anuais de beneficiários de três programas rurais em
+Pernambuco --- Fruticultura Irrigada, Zona Canavieira e Pesca Artesanal ---,
+cobrindo o período de 2021 a 2025 e 101 municípios. O objetivo central é
+identificar qual família de modelos oferece a melhor relação entre acurácia e
+robustez quando o histórico disponível é limitado a cinco pontos por série.
+
+\subsection{Motivação}
+
+\subsection{Objetivos}
+
+Os objetivos específicos deste trabalho são:
+
+\begin{itemize}[leftmargin=2cm]
+  \item Comparar modelos estatísticos (ARIMA, ETS), de aprendizado de máquina
+        clássico (Regressão Linear, Árvore de Decisão) e moderno
+        (Random Forest, LightGBM) numa tarefa de previsão com séries curtas;
+  \item Avaliar o impacto de diferentes estratégias de treinamento ---
+        modelo global versus modelo por setor (\textit{POR\_SETOR});
+  \item Implementar validação \textit{walk-forward} com múltiplos folds para
+        medir a estabilidade dos modelos, evitando conclusões baseadas em
+        um único ano de teste;
+  \item Identificar e documentar fontes de \textit{data leakage} comuns em
+        séries temporais curtas e suas consequências nos resultados reportados.
+\end{itemize}
+
+\subsection{Organização do Texto}
+
+O restante do trabalho está organizado da seguinte forma:
+a Seção~\ref{sec:referencial} apresenta o referencial teórico;
+a Seção~\ref{sec:dados} descreve os dados e o pré-processamento;
+a Seção~\ref{sec:metodologia} detalha os modelos e o protocolo de validação;
+a Seção~\ref{sec:resultados} apresenta e discute os resultados;
+a Seção~\ref{sec:conclusao} conclui o trabalho e aponta direções futuras.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Referencial Teórico}
+\label{sec:referencial}
+
+% Sugestão de subseções — preencha com ~1 página cada:
+
+\subsection{Previsão de Séries Temporais Curtas}
+
+\subsection{Modelos Estatísticos Clássicos}
+
+\subsubsection{ARIMA}
+
+\subsubsection{Suavização Exponencial (ETS)}
+
+\subsection{Aprendizado de Máquina para Séries Temporais}
+
+\subsubsection{Engenharia de Features com Lags}
+
+
+\subsubsection{Random Forest}
+
+
+\subsubsection{LightGBM}
+
+
+\subsection{Validação de Modelos Temporais}
+
+
+\subsection{Data Leakage em Séries Temporais}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Dados e Pré-processamento}
+\label{sec:dados}
+
+\subsection{Descrição do Conjunto de Dados}
+
+Os dados utilizados neste trabalho são registros anuais de beneficiários de
+três programas rurais administrados pelo [nome da instituição/secretaria],
+cobrindo 101 municípios de Pernambuco entre 2021 e 2025. O conjunto original
+contém 517 observações distribuídas entre três programas: Fruticultura Irrigada,
+Zona Canavieira e Pesca Artesanal.
+
+\begin{table}[H]
+  \centering
+  \caption{Resumo do conjunto de dados}
+  \label{tab:dados_resumo}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Atributo}          & \textbf{Valor}              \\
+    \midrule
+    Período                    & 2021–2025 (5 anos)          \\
+    Municípios                 & 101                         \\
+    Programas                  & 3                           \\
+    Observações originais      & 517                         \\
+    Granularidade              & Município $\times$ Programa $\times$ Ano \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Uma característica relevante do conjunto é que nem todo município possui
+registros para todos os programas em todos os anos, gerando lacunas na série.
+Essas lacunas são tratadas conforme descrito na Seção~\ref{sec:grid}.
+
+\subsection{Pré-processamento}
+
+\subsubsection{Limpeza e Padronização}
+
+
+\subsubsection{Expansão do Grid Completo}
+\label{sec:grid}
+
+Para garantir que todos os modelos operem sobre séries sem lacunas temporais,
+foi criado o produto cartesiano completo de municípios, programas e anos
+já presentes no conjunto original. Combinações sem registro real receberam
+o valor zero de beneficiários, estratégia conservadora que assume ausência
+de atividade em vez de dado faltante.
+
+Após a expansão, o conjunto passou de 517 para X observações.
+
+\subsubsection{Codificação de Variáveis Categóricas}
+
+
+\subsection{Engenharia de Features}
+\label{sec:features}
+
+Todas as features foram construídas de forma a não introduzir
+\textit{data leakage} --- ou seja, nenhuma delas utiliza informações
+do período de teste nem do ano imediatamente anterior ($t-1$) ao alvo,
+conforme discutido na Seção~\ref{sec:leakage}.
+
+\begin{table}[H]
+  \centering
+  \caption{Features utilizadas nos modelos de ML (versão final, v5)}
+  \label{tab:features}
+  \begin{tabular}{p{3.5cm} p{8.5cm}}
+    \toprule
+    \textbf{Feature}         & \textbf{Descrição} \\
+    \midrule
+    \texttt{lag\_2}          & Beneficiários em $t-2$ \\
+    \texttt{lag\_3}          & Beneficiários em $t-3$ \\
+    \texttt{rolling\_mean\_2}& Média de \texttt{lag\_2} e \texttt{lag\_3}: $(lag_2 + lag_3)/2$ \\
+    \texttt{trend}           & Variação absoluta: $lag_2 - lag_3$ \\
+    \texttt{growth\_rate}    & Variação proporcional: $(lag_2 - lag_3)/lag_3$; zero quando $lag_3 = 0$ \\
+    \texttt{zero\_historico} & Indicador binário: 1 se $lag_2 = lag_3 = 0$ \\
+    \texttt{ano\_rel}        & Anos desde o início da série (tendência linear) \\
+    \texttt{programa\_total\_lag2} & Soma de \texttt{lag\_2} de todos os municípios do programa no mesmo ano \\
+    \texttt{share\_municipio}& Peso relativo do município no programa: $lag_2 / (programa\_total\_lag_2 + 1)$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Metodologia}
+\label{sec:metodologia}
+
+\subsection{Modelos Avaliados}
+
+Seis modelos foram selecionados, representando três famílias distintas,
+com o objetivo de cobrir um espectro amplo de complexidade e suposições
+sobre os dados.
+
+\begin{table}[H]
+  \centering
+  \caption{Modelos avaliados por família}
+  \label{tab:modelos}
+  \begin{tabular}{lll}
+    \toprule
+    \textbf{Família}   & \textbf{Modelo}         & \textbf{Configuração} \\
+    \midrule
+    Estatístico        & ARIMA                   & Ordem $(1,1,0)$ \\
+    Estatístico        & ETS (Holt Linear)       & Tendência aditiva, sem sazonalidade \\
+    ML Clássico        & Regressão Linear        & Sem regularização \\
+    ML Clássico        & Árvore de Decisão       & \texttt{max\_depth=4} \\
+    ML baseado em Ensemble         & Random Forest           & 200 estimadores, \texttt{max\_depth=6}, \texttt{min\_samples\_leaf=3} \\
+    ML baseado em Ensemble         & LightGBM                & 200 estimadores, \texttt{lr=0.05}, \texttt{max\_depth=4} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{Modelos Estatísticos}
+
+
+\subsubsection{Modelos de ML}
+
+\subsection{Modos de Treinamento}
+
+Cada modelo foi avaliado em dois modos:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{GLOBAL:} um único modelo treinado com dados de todos os
+        municípios e programas simultaneamente.
+  \item \textbf{POR\_SETOR:} um modelo treinado separadamente para cada
+        programa, permitindo que o modelo capture dinâmicas específicas
+        de cada setor.
+\end{itemize}
+
+\subsection{Métrica de Avaliação}
+
+A métrica principal adotada é o Erro Percentual Absoluto Médio
+(\textit{Mean Absolute Percentage Error}, MAPE), definido como:
+
+\begin{equation}
+  \text{MAPE} = \frac{1}{n} \sum_{t=1}^{n}
+  \left| \frac{y_t - \hat{y}_t}{y_t} \right| \times 100\%
+  \label{eq:mape}
+\end{equation}
+
+\noindent onde $y_t$ é o valor real e $\hat{y}_t$ é o valor previsto no
+período $t$. Observações com $y_t \approx 0$ são excluídas do cálculo
+para evitar distorções numéricas.
+
+Para garantir comparabilidade entre modelos estatísticos (que operam em
+séries agregadas por programa) e modelos de ML (que operam no nível
+município), as previsões de ML são somadas por programa antes do cálculo
+do MAPE. Essa função é denominada \texttt{evaluate\_aggregated()} na
+implementação.
+
+São reportados também MAE e RMSE como métricas complementares.
+
+\subsection{Protocolo de Validação}
+\label{sec:validacao}
+
+\subsubsection{Benchmark de Fold Único}
+
+
+\subsubsection{Walk-forward Cross-validation}
+
+A validação principal utiliza a estratégia \textit{expanding window}
+(janela expansível), em que o conjunto de treino cresce a cada fold
+enquanto o conjunto de teste avança um ano por vez. Com dados de 2021
+a 2025 e mínimo de dois anos de treino, foram gerados três folds:
+
+\begin{table}[H]
+  \centering
+  \caption{Folds do walk-forward cross-validation}
+  \label{tab:folds}
+  \begin{tabular}{ccc}
+    \toprule
+    \textbf{Fold} & \textbf{Treino}   & \textbf{Teste} \\
+    \midrule
+    1             & 2021–2022         & 2023           \\
+    2             & 2021–2023         & 2024           \\
+    3             & 2021–2024         & 2025           \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+O desempenho final de cada modelo no CV é reportado como média e desvio
+padrão do MAPE entre os folds válidos (modelos estatísticos requerem
+no mínimo 3 pontos de treino; folds com série insuficiente são excluídos
+automaticamente).
+
+\subsection{Problemas Identificados e Soluções}
+\label{sec:leakage}
+
+\subsubsection{Problema 1 — Comparação em Granularidades Distintas}
+
+\subsubsection{Problema 2 — Data Leakage via \texttt{lag\_1}}
+
+A inclusão de \texttt{lag\_1} (valor de $t-1$) como feature de ML
+equivale, em séries estáveis de curto horizonte, a fornecer ao modelo
+a resposta que ele deveria prever. Isso ficou evidenciado pelo desempenho
+da Árvore de Decisão na Pesca Artesanal: MAPE de 0,03\% com
+\texttt{lag\_1} respondendo por 98,4\% da importância de features ---
+o modelo simplesmente repetia o ano anterior.
+
+\begin{table}[H]
+  \centering
+  \caption{Evidência do leakage via \texttt{lag\_1} — Árvore de Decisão, Pesca Artesanal}
+  \label{tab:leakage_lag1}
+  \begin{tabular}{lrrrr}
+    \toprule
+    \textbf{Município} & \textbf{Real 2025} & \textbf{Previsto} & \textbf{Erro abs.} & \textbf{lag\_1} \\
+    \midrule
+    Goiana    & 1817 & 1810,00 &  7,00 & 1810 \\
+    Recife    &  600 &  596,00 &  4,00 &  592 \\
+    Ipojuca   &  186 &   89,31 & 96,69 &   98 \\
+    Igarassu  &  511 &  443,25 & 67,75 &  477 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent\textbf{Solução:} \texttt{lag\_1} foi removido inteiramente do
+pré-processamento. As features \texttt{rolling\_mean\_2} e \texttt{trend},
+que dependiam internamente de \texttt{lag\_1}, foram recalculadas usando
+\texttt{lag\_2} e \texttt{lag\_3}.
+
+\subsubsection{Problema 3 — Leakage Residual em Features Derivadas}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Resultados e Discussão}
+\label{sec:resultados}
+
+\subsection{Benchmark de Fold Único (2025)}
+
+
+\begin{table}[H]
+  \centering
+  \caption{Resultados do benchmark — fold único (ano de teste: 2025)}
+  \label{tab:resultados_benchmark}
+  \begin{tabular}{llll}
+    \toprule
+    \textbf{Modelo}       & \textbf{Modo}    & \textbf{Programa}          & \textbf{MAPE\%} \\
+    \midrule
+    RandomForest          & POR\_SETOR       & Fruticultura Irrigada      & 2,30  \\
+    RandomForest          & POR\_SETOR       & Zona Canavieira            & 3,00  \\
+    LightGBM              & POR\_SETOR       & Fruticultura Irrigada      & 3,30  \\
+    RandomForest          & GLOBAL           & Todos                      & 3,76  \\
+    ETS (Holt Linear)     & POR\_SETOR       & Zona Canavieira            & 3,78  \\
+    ARIMA                 & GLOBAL           & Todos                      & 4,06  \\
+    ARIMA                 & POR\_SETOR       & Fruticultura Irrigada      & 4,31  \\
+    DecisionTree          & POR\_SETOR       & Pesca Artesanal            & 7,48  \\
+    RandomForest          & POR\_SETOR       & Pesca Artesanal            & 7,74  \\
+    ARIMA                 & POR\_SETOR       & Pesca Artesanal            & 9,32  \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Walk-forward Cross-validation}
+
+\begin{table}[H]
+  \centering
+  \caption{Walk-forward CV — média de 3 folds (2023, 2024, 2025)}
+  \label{tab:resultados_cv}
+  \begin{tabular}{lllrrl}
+    \toprule
+    \textbf{Modelo}   & \textbf{Modo} & \textbf{Programa}       & \textbf{MAPE médio} & \textbf{Desvio} & \textbf{Folds} \\
+    \midrule
+    ARIMA             & POR\_SETOR    & Fruticultura Irrigada   & 5,84\%              & ±2,16           & 2 \\
+    ARIMA             & POR\_SETOR    & Pesca Artesanal         & 6,75\%              & ±3,64           & 2 \\
+    ARIMA             & GLOBAL        & Todos                   & 7,46\%              & ±4,81           & 2 \\
+    RandomForest      & POR\_SETOR    & Fruticultura Irrigada   & 7,83\%              & ±9,78           & 3 \\
+    DecisionTree      & POR\_SETOR    & Pesca Artesanal         & 9,55\%              & ±7,68           & 3 \\
+    RandomForest      & POR\_SETOR    & Pesca Artesanal         & 9,91\%              & ±5,70           & 3 \\
+    DecisionTree      & POR\_SETOR    & Fruticultura Irrigada   & 10,51\%             & ±2,80           & 3 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Discussão}
+
+\subsubsection{POR\_SETOR versus GLOBAL}
+
+\subsubsection{ARIMA como Modelo Mais Robusto}
+
+\subsubsection{Alta Variância dos Modelos de ML no CV}
+
+
+\subsubsection{Limitações}
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Tamanho da série:} cinco pontos anuais por série limitam
+        a generalização de qualquer modelo e impõem incerteza elevada nas
+        estimativas de CV.
+  \item \textbf{Zeros estruturais:} municípios sem histórico em um dado
+        programa recebem valor zero, o que pode distorcer features baseadas
+        em lags e inflacionar o MAPE quando o valor real também é zero.
+  \item \textbf{Ausência de sazonalidade:} com dados anuais, não é
+        possível modelar padrões intra-anuais que possam existir nos programas.
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\section{Conclusão}
+\label{sec:conclusao}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\newpage
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{00}
+
+\bibitem{hyndman2021}
+R. J. Hyndman e G. Athanasopoulos,
+\textit{Forecasting: Principles and Practice}, 3ª ed.
+OTexts, 2021. Disponível em: \url{https://otexts.com/fpp3/}
+
+\bibitem{makridakis2022}
+S. Makridakis, E. Spiliotis e V. Assimakopoulos,
+``M5 accuracy competition: Results, findings, and conclusions,''
+\textit{International Journal of Forecasting}, vol. 38, n. 4,
+pp. 1346--1364, 2022.
+
+\bibitem{breiman2001}
+L. Breiman,
+``Random forests,''
+\textit{Machine Learning}, vol. 45, n. 1, pp. 5--32, 2001.
+
+\bibitem{ke2017}
+G. Ke et al.,
+``LightGBM: A highly efficient gradient boosting decision tree,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+vol. 30, 2017.
+
+\bibitem{box2015}
+G. E. P. Box, G. M. Jenkins, G. C. Reinsel e G. M. Ljung,
+\textit{Time Series Analysis: Forecasting and Control}, 5ª ed.
+Wiley, 2015.
+
+\bibitem{bergmeir2012}
+C. Bergmeir e J. M. Benítez,
+``On the use of cross-validation for time series predictor evaluation,''
+\textit{Information Sciences}, vol. 191, pp. 192--213, 2012.
+
+\bibitem{sklearn}
+F. Pedregosa et al.,
+``Scikit-learn: Machine learning in Python,''
+\textit{Journal of Machine Learning Research}, vol. 12,
+pp. 2825--2830, 2011.
+
+\end{thebibliography}
+
+\end{document}

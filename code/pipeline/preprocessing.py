@@ -106,24 +106,58 @@ def _expand_grid(df: pd.DataFrame) -> pd.DataFrame:
 
 def _add_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Cria features de ML baseadas no histórico de cada série (município × programa):
-      - lag_1, lag_2: beneficiários do ano anterior e do anterior ao anterior
-      - rolling_mean_2: média dos 2 anos anteriores
-      - trend: diferença entre lag_1 e lag_2 (captura aceleração/desaceleração)
-      - ano_rel: ano relativo a 2021 (tendência linear simples)
+    Features de série individual (município × programa), todas baseadas em
+    lag_2 e lag_3 — sem usar lag_1 para evitar leakage em séries curtas.
+
+      - lag_2, lag_3       : beneficiários de t-2 e t-3
+      - rolling_mean_2     : média de lag_2 e lag_3
+      - trend              : lag_2 - lag_3 (variação absoluta)
+      - growth_rate        : (lag_2 - lag_3) / lag_3 (variação proporcional;
+                             0 quando lag_3 = 0)
+      - zero_historico     : 1 se lag_2 = lag_3 = 0 (série sem histórico disponível)
+      - ano_rel            : anos desde o início da série (tendência linear)
     """
     df = df.sort_values(["MUNICIPIO", "PROGRAMA", YEAR_COL]).copy()
     grp = df.groupby(["MUNICIPIO", "PROGRAMA"])[TARGET]
 
-    df["lag_1"]         = grp.shift(1)
-    df["lag_2"]         = grp.shift(2)
-    df["rolling_mean_2"] = (df["lag_1"] + df["lag_2"]) / 2
-    df["trend"]         = df["lag_1"] - df["lag_2"]
-    df["ano_rel"]       = df[YEAR_COL] - df[YEAR_COL].min()
+    df["lag_2"]          = grp.shift(2)
+    df["lag_3"]          = grp.shift(3)
+    df["rolling_mean_2"] = (df["lag_2"] + df["lag_3"]) / 2
+    df["trend"]          = df["lag_2"] - df["lag_3"]
+    df["ano_rel"]        = df[YEAR_COL] - df[YEAR_COL].min()
 
     # Preenche NaN gerados pelos lags com 0
-    lag_cols = ["lag_1", "lag_2", "rolling_mean_2", "trend"]
+    lag_cols = ["lag_2", "lag_3", "rolling_mean_2", "trend"]
     df[lag_cols] = df[lag_cols].fillna(0)
+
+    # Taxa de crescimento proporcional (0 quando lag_3 = 0 — histórico insuficiente)
+    df["growth_rate"] = np.where(
+        df["lag_3"] > 0,
+        (df["lag_2"] - df["lag_3"]) / df["lag_3"],
+        0.0
+    )
+
+    # Flag de série sem nenhum histórico disponível
+    df["zero_historico"] = ((df["lag_2"] == 0) & (df["lag_3"] == 0)).astype(int)
+
+    return df
+
+
+def _add_context_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Features de contexto cross-município dentro do mesmo programa.
+    Calculadas sobre lag_2 (dados de t-2), sem leakage.
+
+      - programa_total_lag2 : soma de lag_2 de todos os municípios do programa
+                              no mesmo ano — captura o nível agregado do programa
+      - share_municipio     : lag_2 / programa_total_lag2 — peso relativo do
+                              município no programa (estabiliza a escala)
+    """
+    df["programa_total_lag2"] = df.groupby(
+        ["PROGRAMA", YEAR_COL]
+    )["lag_2"].transform("sum")
+
+    df["share_municipio"] = df["lag_2"] / (df["programa_total_lag2"] + 1)
 
     return df
 
@@ -177,6 +211,7 @@ def load_and_preprocess(file_path: str) -> dict:
 
     # 5. Features de ML
     df_ml = _add_ml_features(df_full)
+    df_ml = _add_context_features(df_ml)
 
     # 6. Splits por setor (programa)
     programas = sorted(df_ml["PROGRAMA"].unique())
