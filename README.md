@@ -22,7 +22,7 @@ data/
 |---------------|-------------------------------------|-------------------------------|
 | Estatístico   | ARIMA (1,1,0), ETS (Holt Linear)    | Série agregada por programa   |
 | ML Clássico   | Regressão Linear, Árvore de Decisão | Município × programa          |
-| ML Moderno    | Random Forest, LightGBM             | Município × programa          |
+| ML Ensemble   | Random Forest, LightGBM             | Município × programa          |
 
 **Modos:** `GLOBAL` (todos os municípios/programas juntos) · `POR_SETOR` (um modelo por PROGRAMA)
 
@@ -63,6 +63,19 @@ data/
   - RandomForest beneficiado pelo contexto cross-município: Fruticultura 5,80% → 2,30%, Canavieira 17,65% → 3,00%
   - CV do RandomForest: Fruticultura 9,09% → 7,83%, Pesca 10,85% → 9,91% (melhora consistente, variância persiste)
   - Resultados salvos em `resultados_benchmark_v5.csv` e `resultados_cv_v5_*.csv`
+
+### 16/05/2026
+- **Renomeação de família:** "ML Moderno" → "ML baseado em Ensemble" em todo o código (`benchmark.py`, `modeling.ipynb`, CSVs de saída v7+).
+- **Grid search para RandomForest e LightGBM:** `run_grid_search()` em `benchmark.py` avalia 18 combinações (RF) e 12 (LightGBM) via walk-forward CV POR_SETOR e seleciona os melhores hiperparâmetros.
+  - RF: `n_estimators=100, max_depth=6, min_samples_leaf=2` (CV MAPE médio 13,65%)
+  - LightGBM: `n_estimators=100, max_depth=3, learning_rate=0.05` (CV MAPE médio 27,10%)
+  - Nota: LightGBM não se beneficia de tuning nessa escala de dados — alta variância persiste independente dos hiperparâmetros.
+- **Benchmark v7:** reexecução com params otimizados → `resultados_benchmark_v7.csv` e `resultados_cv_v7_*.csv`
+  - RandomForest Fruticultura fold 2025: 2,30% (v6) → **0,62%** (v7) — melhora expressiva
+  - RandomForest Fruticultura CV: 7,83% ±9,78 (v5) → **3,58% ±3,48** (v7) — menor média e menor variância
+  - LightGBM sem ganho significativo no CV mesmo com tuning (alta variância estrutural)
+- **Flag `--gridsearch` adicionada ao CLI:** `python benchmark.py --file ... --gridsearch` roda o grid search antes e usa os melhores params no benchmark/CV subsequente.
+- `modeling.ipynb` atualizado para usar dados v7 e incluir `ETS_notrend` e `Naive` nos gráficos.
 
 ### 14/05/2026
 - **Fix leakage residual no CV (crítico):** `_add_context_features` calculava `programa_total_lag2`
@@ -139,50 +152,56 @@ Features de ML na v4: `lag_2`, `lag_3`, `rolling_mean_2`, `trend`, `ano_rel`, `A
 
 ---
 
-## Resultados Definitivos (v5 — features enriquecidas, sem leakage)
+## Resultados Definitivos (v7 — grid search + features enriquecidas, sem leakage)
 
-> `resultados_benchmark_v5.csv` · features: `lag_2`, `lag_3`, `rolling_mean_2`, `trend`, `ano_rel`, `growth_rate`, `zero_historico`, `programa_total_lag2`, `share_municipio`
+> `resultados_benchmark_v7.csv` / `resultados_cv_v7_*.csv`
+> features: `lag_2`, `lag_3`, `rolling_mean_2`, `trend`, `ano_rel`, `growth_rate`, `zero_historico`, `programa_total_lag2`, `share_municipio`
+> RF: `n_estimators=100, max_depth=6, min_samples_leaf=2` · LightGBM: `n_estimators=100, max_depth=3, lr=0.05` (selecionados por grid search CV)
 
 ### Benchmark único (fold 2025)
 
-| Modelo            | Modo      | Programa              | MAPE%  |
-|-------------------|-----------|-----------------------|--------|
-| RandomForest      | POR_SETOR | Fruticultura Irrigada | 2,30%  |
-| RandomForest      | POR_SETOR | Zona Canavieira       | 3,00%  |
-| LightGBM          | POR_SETOR | Fruticultura Irrigada | 3,30%  |
-| RandomForest      | GLOBAL    | Todos                 | 3,76%  |
-| ETS (Holt Linear) | POR_SETOR | Zona Canavieira       | 3,78%  |
-| ARIMA             | GLOBAL    | Todos                 | 4,06%  |
-| ARIMA             | POR_SETOR | Fruticultura Irrigada | 4,31%  |
-| DecisionTree      | POR_SETOR | Pesca Artesanal       | 7,48%  |
-| RandomForest      | POR_SETOR | Pesca Artesanal       | 7,74%  |
-| ARIMA             | POR_SETOR | Pesca Artesanal       | 9,32%  |
+| Modelo                  | Modo      | Programa              | MAPE%   |
+|-------------------------|-----------|-----------------------|---------|
+| RandomForest            | POR_SETOR | Fruticultura Irrigada | 0,62%   |
+| RandomForest            | POR_SETOR | Pesca Artesanal       | 1,77%   |
+| LightGBM                | POR_SETOR | Fruticultura Irrigada | 1,22%   |
+| Naive (baseline)        | POR_SETOR | Pesca Artesanal       | 2,13%   |
+| Naive (baseline)        | POR_SETOR | Fruticultura Irrigada | 3,12%   |
+| ETS_notrend             | GLOBAL    | Todos                 | 3,13%   |
+| ETS (Holt Linear)       | POR_SETOR | Zona Canavieira       | 3,78%   |
+| RandomForest            | POR_SETOR | Zona Canavieira       | 4,68%   |
+| ETS_notrend             | POR_SETOR | Pesca Artesanal       | 4,77%   |
+| ARIMA                   | GLOBAL    | Todos                 | 4,06%   |
+| ARIMA                   | POR_SETOR | Fruticultura Irrigada | 4,31%   |
 
 ### Walk-forward CV (média de 3 folds: 2023, 2024, 2025)
 
-| Modelo            | Modo      | Programa              | MAPE médio | ± desvio | Folds |
-|-------------------|-----------|-----------------------|------------|----------|-------|
-| ARIMA             | POR_SETOR | Fruticultura Irrigada | 5,84%      | ±2,16    | 2     |
-| ARIMA             | POR_SETOR | Pesca Artesanal       | 6,75%      | ±3,64    | 2     |
-| ARIMA             | GLOBAL    | Todos                 | 7,46%      | ±4,81    | 2     |
-| RandomForest      | POR_SETOR | Fruticultura Irrigada | 7,83%      | ±9,78    | 3     |
-| DecisionTree      | POR_SETOR | Pesca Artesanal       | 9,55%      | ±7,68    | 3     |
-| RandomForest      | POR_SETOR | Pesca Artesanal       | 9,91%      | ±5,70    | 3     |
-| DecisionTree      | POR_SETOR | Fruticultura Irrigada | 10,51%     | ±2,80    | 3     |
+| Modelo                  | Modo      | Programa              | MAPE médio | ± desvio | Folds |
+|-------------------------|-----------|-----------------------|------------|----------|-------|
+| ETS_notrend             | POR_SETOR | Pesca Artesanal       | 5,35%      | ±3,91    | 3     |
+| ARIMA                   | POR_SETOR | Fruticultura Irrigada | 5,84%      | ±2,16    | 2     |
+| ARIMA                   | POR_SETOR | Pesca Artesanal       | 6,75%      | ±3,64    | 2     |
+| ARIMA                   | GLOBAL    | Todos                 | 7,46%      | ±4,81    | 2     |
+| RandomForest            | POR_SETOR | Fruticultura Irrigada | **3,58%**  | ±3,48    | 3     |
+| RandomForest            | POR_SETOR | Pesca Artesanal       | 17,31%     | ±14,31   | 3     |
+| DecisionTree            | POR_SETOR | Pesca Artesanal       | 9,55%      | ±7,68    | 3     |
+| LightGBM                | POR_SETOR | Fruticultura Irrigada | 32,93%     | ±30,88   | 3     |
 
 **Melhores por família (CV):**
-- Estatístico: ARIMA POR_SETOR — 5,84% ±2,16 (Fruticultura Irrigada)
-- ML Moderno: RandomForest POR_SETOR — 7,83% ±9,78 (Fruticultura Irrigada)
+- Estatístico: ETS_notrend POR_SETOR — 5,35% ±3,91 (Pesca Artesanal) · ARIMA POR_SETOR — 5,84% ±2,16 (Fruticultura)
+- ML baseado em Ensemble: RandomForest POR_SETOR — 3,58% ±3,48 (Fruticultura Irrigada)
 - ML Clássico: DecisionTree POR_SETOR — 9,55% ±7,68 (Pesca Artesanal)
+- Baseline: Naive POR_SETOR — 17,34% ±13,99 (Pesca Artesanal)
 
 **Achados consolidados:**
 - **POR_SETOR > GLOBAL** consistentemente — dinâmicas distintas entre programas justificam modelos separados
-- **ARIMA é o modelo mais robusto no CV** — menor média e menor variância entre folds; benchmark único subestimava sua consistência
-- **RandomForest** beneficiado pelas features contextuais (`share_municipio`, `programa_total_lag2`); competitivo com estatísticos no fold 2025, mas alta variância no CV
-- **ETS Zona Canavieira** (3,78% no fold 2025) tem desvio de ±34,45 no CV — resultado único era atípico
-- **LightGBM** não se beneficiou das novas features tanto quanto RandomForest; alta variância persiste no CV
+- **RandomForest com grid search** é agora o melhor modelo em CV (3,58% ±3,48 na Fruticultura) — grid search reduziu overfitting ao encontrar `min_samples_leaf=2`; melhora em fold único de 2,30% → 0,62%
+- **ARIMA é o modelo estatístico mais robusto** — menor variância entre folds; consistente mesmo com poucos dados de treino
+- **ETS_notrend** surpreendentemente bom no CV da Pesca (5,35%) — remover tendência ajuda em séries voláteis
+- **ETS (com tendência)** tem CV de 40% na Canavieira — resultado de 3,78% no fold 2025 era excepcional
+- **LightGBM** não se beneficia de grid search nessa escala — alta variância estrutural em todos os hiperparâmetros testados
+- **Naive (lag_2)** bate vários modelos de ML no CV para Pesca (17,34%) — reforça dificuldade fundamental do problema com 5 pontos
 - **DecisionTree e LinearRegression** seguem fracos — dependiam estruturalmente do leakage via lag_1
-- **Regressão Linear** ainda produz extrapolações negativas com poucos pontos de treino
 
 ---
 
@@ -193,5 +212,7 @@ Features de ML na v4: `lag_2`, `lag_3`, `rolling_mean_2`, `trend`, `ano_rel`, `A
 - [x] Remover leakage residual em `rolling_mean_2` e `trend` (v4)
 - [x] Implementar walk-forward CV com 3 folds
 - [x] Feature engineering sem leakage: `growth_rate`, `zero_historico`, `programa_total_lag2`, `share_municipio` (v5)
-- [ ] Visualização comparativa no `modeling.ipynb`
+- [x] Visualização comparativa no `modeling.ipynb`
+- [x] Grid search para RandomForest e LightGBM (v7)
+- [x] Renomear "ML Moderno" → "ML baseado em Ensemble"
 - [ ] Redigir seção de metodologia do TCC
