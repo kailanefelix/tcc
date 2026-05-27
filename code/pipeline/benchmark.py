@@ -23,7 +23,7 @@ import argparse
 import warnings
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -49,6 +49,7 @@ FAMILIES = {
     "ML Clássico":  ["LinearRegression", "DecisionTree"],
     "ML baseado em Ensemble": ["RandomForest", "LightGBM"],
     "Baseline":     ["Naive"],  # baseline: repete lag_2 — referência mínima de aprendizado
+    "Ensemble":     ["SimpleAverage", "WeightedAverage", "StackingMeta"],
 }
 
 
@@ -330,6 +331,240 @@ def run_naive_model(df_ml: pd.DataFrame, test_year: int,
 
 
 # ---------------------------------------------------------------------------
+# Ensemble de modelos
+# ---------------------------------------------------------------------------
+
+def _collect_ml_predictions(df_ml: pd.DataFrame, test_year: int,
+                             scope: str = "GLOBAL",
+                             programa: str | None = None) -> dict:
+    """
+    Treina modelos de ML e devolve previsões no nível linha (município × programa).
+    Retorna {model_name: {"y_pred": array, "y_true": array, "test_df": df}}.
+    Usado exclusivamente pelo pipeline de ensemble — não altera run_ml_models().
+    """
+    if scope == "GLOBAL":
+        subset = df_ml
+    else:
+        subset = df_ml[df_ml["PROGRAMA"] == programa]
+
+    X_train, y_train, X_test, y_test = _get_ml_splits(subset, test_year)
+    test_df = subset[subset[YEAR_COL] == test_year].copy()
+    test_df = test_df[~((test_df["lag_2"] == 0) & (test_df[TARGET] == 0))]
+
+    if len(X_train) == 0 or len(X_test) == 0:
+        return {}
+
+    ml_names = FAMILIES["ML Clássico"] + FAMILIES["ML baseado em Ensemble"]
+    results = {}
+    for name, model in _get_ml_models().items():
+        if name not in ml_names:
+            continue
+        try:
+            model.fit(X_train, y_train)
+            results[name] = {
+                "y_pred": model.predict(X_test),
+                "y_true": y_test.values,
+                "test_df": test_df,
+            }
+        except Exception:
+            pass
+
+    # Baseline Naive: previsão = lag_2
+    if not test_df.empty:
+        results["Naive"] = {
+            "y_pred": test_df["lag_2"].values,
+            "y_true": test_df[TARGET].values,
+            "test_df": test_df,
+        }
+
+    return results
+
+
+def _agg_predictions(y_pred: np.ndarray, y_true: np.ndarray,
+                     test_df: pd.DataFrame, programa: str
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Agrega previsões ao nível de programa, replicando a lógica de evaluate_aggregated().
+    Para GLOBAL (programa="TODOS"): um total por programa.
+    Para POR_SETOR: um único total.
+    """
+    df = test_df.copy()
+    df["_pred"] = y_pred
+    df["_true"] = y_true
+
+    if programa == "TODOS":
+        agg = df.groupby("PROGRAMA").agg(
+            total_true=("_true", "sum"),
+            total_pred=("_pred", "sum"),
+        ).reset_index()
+    else:
+        agg = pd.DataFrame({
+            "total_true": [df["_true"].sum()],
+            "total_pred": [df["_pred"].sum()],
+        })
+
+    return (agg["total_pred"].values.astype(float),
+            agg["total_true"].values.astype(float))
+
+
+def _eval_agg_array(y_pred_agg: np.ndarray, y_true_agg: np.ndarray) -> dict:
+    """Calcula métricas sobre arrays já agregados (sem precisar de test_df)."""
+    mae  = mean_absolute_error(y_true_agg, y_pred_agg)
+    rmse = np.sqrt(mean_squared_error(y_true_agg, y_pred_agg))
+    mape = _mape(y_true_agg, y_pred_agg)
+    return {
+        "MAE":   round(mae, 2),
+        "RMSE":  round(rmse, 2),
+        "MAPE%": round(mape, 2),
+        "y_true_total": round(float(y_true_agg.sum()), 0),
+        "y_pred_total": round(float(y_pred_agg.sum()), 0),
+    }
+
+
+def run_ensemble_models(
+    fold_predictions: dict,
+    cv_history: list,
+    test_df: pd.DataFrame,
+    programa: str,
+) -> dict:
+    """
+    Avalia três estratégias de ensemble sobre previsões dos modelos individuais
+    de ML para o fold corrente.
+
+    Parâmetros
+    ----------
+    fold_predictions : {modelo: {"y_pred": array, "y_true": array, "test_df": df}}
+        Previsões no nível linha do fold corrente (apenas modelos de ML + Naive).
+    cv_history : list of dict
+        Expanding window: um elemento por fold ANTERIOR ao corrente.
+        Cada elemento: {modelo: {"mape": float, "y_pred_agg": array, "y_true_agg": array}}.
+        Nunca inclui dados do fold corrente — garante leakage-free.
+    test_df : pd.DataFrame
+        Não usado diretamente (test_df já embutido em fold_predictions); mantido
+        para compatibilidade com a assinatura especificada.
+    programa : str
+        "TODOS" para modo GLOBAL, nome do programa para POR_SETOR.
+
+    Retorna
+    -------
+    {estratégia: métricas} no mesmo formato de evaluate_aggregated().
+    """
+    available_models = [m for m in fold_predictions if fold_predictions[m]]
+    if not available_models:
+        return {}
+
+    # Agrega previsões de cada modelo ao nível de programa (igual a evaluate_aggregated)
+    agg_preds: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for m in available_models:
+        fp = fold_predictions[m]
+        y_pred_agg, y_true_agg = _agg_predictions(
+            fp["y_pred"], fp["y_true"], fp["test_df"], programa
+        )
+        agg_preds[m] = (y_pred_agg, y_true_agg)
+
+    y_true_ref = list(agg_preds.values())[0][1]
+    results = {}
+
+    # -------------------------------------------------------------------
+    # Estratégia 1 — Média Simples
+    # Janela: usa apenas previsões do fold corrente — sem histórico necessário.
+    # -------------------------------------------------------------------
+    preds_stack = np.stack([agg_preds[m][0] for m in available_models], axis=0)
+    simple_pred = preds_stack.mean(axis=0)
+    results["SimpleAverage"] = _eval_agg_array(simple_pred, y_true_ref)
+
+    # -------------------------------------------------------------------
+    # Estratégia 2 — Média Ponderada por CV (expanding window)
+    # Pesos ∝ 1/MAPE médio calculado sobre folds ANTERIORES ao corrente.
+    # Fold sem histórico (primeiro fold): fallback para pesos iguais.
+    # -------------------------------------------------------------------
+    if not cv_history:
+        # Primeiro fold — sem histórico de CV disponível: pesos iguais
+        results["WeightedAverage"] = _eval_agg_array(simple_pred.copy(), y_true_ref)
+    else:
+        # Acumula MAPEs de cada modelo nos folds anteriores (expanding window)
+        mape_history: dict[str, list] = {}
+        for hist_fold in cv_history:
+            for m, info in hist_fold.items():
+                mape_val = info.get("mape", np.nan)
+                if not np.isnan(mape_val):
+                    mape_history.setdefault(m, []).append(mape_val)
+
+        # Modelos com histórico válido e presentes no fold corrente
+        valid_models = [m for m in available_models if mape_history.get(m)]
+
+        if not valid_models:
+            results["WeightedAverage"] = _eval_agg_array(simple_pred.copy(), y_true_ref)
+        else:
+            avg_mapes   = {m: np.mean(mape_history[m]) for m in valid_models}
+            inv_mapes   = {m: 1.0 / v for m, v in avg_mapes.items() if v > 0}
+            total_inv   = sum(inv_mapes.values())
+
+            if total_inv == 0:
+                results["WeightedAverage"] = _eval_agg_array(simple_pred.copy(), y_true_ref)
+            else:
+                weights = {m: inv_mapes.get(m, 0.0) / total_inv for m in available_models}
+                weighted_pred = sum(
+                    agg_preds[m][0] * weights[m] for m in available_models
+                )
+                results["WeightedAverage"] = _eval_agg_array(weighted_pred, y_true_ref)
+
+    # -------------------------------------------------------------------
+    # Estratégia 3 — Stacking com Ridge (expanding window)
+    # Meta-modelo treinado sobre previsões agregadas dos folds ANTERIORES.
+    # Primeiro fold (sem histórico): retorna NaN — sem fallback artificial.
+    # -------------------------------------------------------------------
+    nan_metrics = {"MAE": np.nan, "RMSE": np.nan, "MAPE%": np.nan,
+                   "y_true_total": np.nan, "y_pred_total": np.nan}
+
+    if not cv_history:
+        results["StackingMeta"] = nan_metrics
+    else:
+        X_meta_rows, y_meta_rows = [], []
+        for hist_fold in cv_history:
+            hist_models = [m for m in available_models if m in hist_fold]
+            if not hist_models:
+                continue
+            n_pts = len(hist_fold[hist_models[0]]["y_pred_agg"])
+            # Uma linha por ponto de agregação (programa); colunas = modelos
+            row_block = np.stack(
+                [hist_fold[m]["y_pred_agg"] if m in hist_fold
+                 else np.full(n_pts, np.nan)
+                 for m in available_models],
+                axis=1,
+            )  # shape: (n_pts, n_models)
+            X_meta_rows.append(row_block)
+            y_meta_rows.append(hist_fold[hist_models[0]]["y_true_agg"])
+
+        if not X_meta_rows:
+            results["StackingMeta"] = nan_metrics
+        else:
+            X_meta = np.vstack(X_meta_rows)
+            y_meta = np.concatenate(y_meta_rows)
+
+            # Remove linhas com NaN (modelo ausente em algum fold anterior)
+            mask = ~np.isnan(X_meta).any(axis=1) & ~np.isnan(y_meta)
+            X_meta, y_meta = X_meta[mask], y_meta[mask]
+
+            n_samples = len(X_meta)
+            if n_samples < 3:
+                print(f"AVISO: Stacking treinado com apenas {n_samples} amostras")
+
+            if n_samples == 0:
+                results["StackingMeta"] = nan_metrics
+            else:
+                try:
+                    meta = Ridge(alpha=1.0).fit(X_meta, y_meta)
+                    X_curr = np.stack([agg_preds[m][0] for m in available_models], axis=1)
+                    stacking_pred = meta.predict(X_curr)
+                    results["StackingMeta"] = _eval_agg_array(stacking_pred, y_true_ref)
+                except Exception:
+                    results["StackingMeta"] = nan_metrics
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
@@ -480,6 +715,12 @@ def run_walkforward_cv(file_path: str,
     print(f"[cv] Folds ({len(test_years)}): anos de teste = {test_years}\n")
 
     fold_dfs = []
+    # Expanding window: acumula histórico de previsões de folds anteriores para o ensemble.
+    # cv_history_global[i] e cv_history_ps[prog][i] contêm dados do i-ésimo fold passado;
+    # o fold corrente nunca entra no histórico antes de ser avaliado.
+    cv_history_global: list[dict] = []
+    cv_history_ps: dict[str, list] = {prog: [] for prog in programas}
+
     for test_year in test_years:
         n_train = anos.index(test_year)
         train_anos = anos[:n_train]
@@ -494,6 +735,71 @@ def run_walkforward_cv(file_path: str,
         fold_df = _run_single_fold(df_full_fold, df_ml_fold, programas, test_year)
         fold_df["fold"]    = test_year
         fold_df["n_train"] = n_train
+
+        # ----------------------------------------------------------------
+        # Ensemble — coleta previsões do fold corrente e avalia estratégias
+        # ----------------------------------------------------------------
+        ens_rows: list[dict] = []
+
+        # GLOBAL
+        fold_preds_g = _collect_ml_predictions(df_ml_fold, test_year, "GLOBAL")
+        if fold_preds_g:
+            print(f"\n  [Ensemble] GLOBAL  (histórico: {len(cv_history_global)} fold(s))")
+            ens_g = run_ensemble_models(fold_preds_g, cv_history_global,
+                                        test_df=None, programa="TODOS")
+            for strategy, metrics in ens_g.items():
+                ens_rows.append({"modelo": strategy, "familia": "Ensemble",
+                                  "modo": "GLOBAL", "programa": "TODOS", **metrics})
+                print(f"     {strategy:20s} MAPE%={metrics.get('MAPE%', 'nan'):>6}")
+
+            # Acumula histórico APÓS avaliação (expanding window — sem leakage)
+            hist_g: dict = {}
+            for m, fp in fold_preds_g.items():
+                mape_row = fold_df[(fold_df["modelo"] == m) & (fold_df["modo"] == "GLOBAL")]
+                mape_val = (float(mape_row["MAPE%"].iloc[0])
+                            if not mape_row.empty else np.nan)
+                y_pred_agg, y_true_agg = _agg_predictions(
+                    fp["y_pred"], fp["y_true"], fp["test_df"], "TODOS"
+                )
+                hist_g[m] = {"mape": mape_val,
+                              "y_pred_agg": y_pred_agg,
+                              "y_true_agg": y_true_agg}
+            cv_history_global.append(hist_g)
+
+        # POR_SETOR
+        for prog in programas:
+            fold_preds_ps = _collect_ml_predictions(
+                df_ml_fold, test_year, "POR_SETOR", prog
+            )
+            if fold_preds_ps:
+                ens_ps = run_ensemble_models(fold_preds_ps, cv_history_ps[prog],
+                                             test_df=None, programa=prog)
+                for strategy, metrics in ens_ps.items():
+                    ens_rows.append({"modelo": strategy, "familia": "Ensemble",
+                                      "modo": "POR_SETOR", "programa": prog, **metrics})
+
+                # Acumula histórico para este programa APÓS avaliação
+                hist_ps: dict = {}
+                for m, fp in fold_preds_ps.items():
+                    mape_row = fold_df[(fold_df["modelo"] == m) &
+                                       (fold_df["modo"] == "POR_SETOR") &
+                                       (fold_df["programa"] == prog)]
+                    mape_val = (float(mape_row["MAPE%"].iloc[0])
+                                if not mape_row.empty else np.nan)
+                    y_pred_agg, y_true_agg = _agg_predictions(
+                        fp["y_pred"], fp["y_true"], fp["test_df"], prog
+                    )
+                    hist_ps[m] = {"mape": mape_val,
+                                   "y_pred_agg": y_pred_agg,
+                                   "y_true_agg": y_true_agg}
+                cv_history_ps[prog].append(hist_ps)
+
+        if ens_rows:
+            ens_df = pd.DataFrame(ens_rows)
+            ens_df["fold"]    = test_year
+            ens_df["n_train"] = n_train
+            fold_df = pd.concat([fold_df, ens_df], ignore_index=True)
+
         fold_dfs.append(fold_df)
 
     df_folds = pd.concat(fold_dfs, ignore_index=True)
@@ -644,16 +950,44 @@ def print_cv_summary(df_summary: pd.DataFrame):
     print("\n" + "=" * 80)
     print("RESUMO WALK-FORWARD CV  (MAPE médio ± desvio padrão entre folds)")
     print("=" * 80)
-    print(df_summary.to_string(index=False, float_format="%.2f"))
+
+    # Tabela geral sem os ensembles (mais legível)
+    df_ind = df_summary[df_summary["familia"] != "Ensemble"]
+    print(df_ind.to_string(index=False, float_format="%.2f"))
 
     print("\n--- Melhor modelo por família (MAPE médio) ---")
-    for familia in df_summary["familia"].unique():
-        sub = df_summary[df_summary["familia"] == familia]
+    for familia in df_ind["familia"].unique():
+        sub = df_ind[df_ind["familia"] == familia]
         best = sub.loc[sub["mape_mean"].idxmin()]
         std_str = f"±{best['mape_std']:.2f}" if not np.isnan(best["mape_std"]) else "±n/a"
         print(f"  {familia:15s}: {best['modelo']} "
               f"(modo={best['modo']}, programa={best['programa']}, "
               f"MAPE={best['mape_mean']:.2f}% {std_str}, folds={int(best['n_folds'])})")
+
+    # ----------------------------------------------------------------
+    # Seção separada: Ensemble
+    # ----------------------------------------------------------------
+    df_ens = df_summary[df_summary["familia"] == "Ensemble"]
+    if df_ens.empty:
+        return
+
+    print("\n" + "=" * 80)
+    print("ENSEMBLE — MAPE médio ± desvio padrão entre folds")
+    print("=" * 80)
+    print(df_ens.to_string(index=False, float_format="%.2f"))
+
+    print("\n--- Melhor estratégia de ensemble (MAPE médio) ---")
+    df_ens_valid = df_ens.dropna(subset=["mape_mean"])
+    if df_ens_valid.empty:
+        print("  (nenhuma estratégia com folds válidos suficientes)")
+        return
+    best_ens = df_ens_valid.loc[df_ens_valid["mape_mean"].idxmin()]
+    std_str  = (f"±{best_ens['mape_std']:.2f}"
+                if not np.isnan(best_ens["mape_std"]) else "±n/a")
+    print(f"  {best_ens['modelo']} "
+          f"(modo={best_ens['modo']}, programa={best_ens['programa']}, "
+          f"MAPE={best_ens['mape_mean']:.2f}% {std_str}, "
+          f"folds={int(best_ens['n_folds'])})")
 
 
 # ---------------------------------------------------------------------------

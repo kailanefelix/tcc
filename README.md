@@ -93,6 +93,13 @@ data/
   Efeito no fold 2025: Fruticultura 2,30% → 15,28% (piora no fold único mas melhora esperada no CV).
 - Resultados salvos em `resultados_benchmark_v6.csv` e `resultados_cv_v6_*.csv`
 
+### 23/05/2026
+- Seleção estática: ARIMA excluído da elegibilidade por ter apenas
+  1 fold histórico válido (NaN no fold 2023 por série de treino
+  insuficiente — mínimo de 2 pontos, ARIMA requer 3)
+- Critério de elegibilidade atualizado: n_folds_hist >= 2
+- Resultados salvos em resultados_selecao_v2.csv
+
 ---
 
 ## Problemas e Soluções
