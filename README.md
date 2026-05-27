@@ -93,6 +93,23 @@ data/
   Efeito no fold 2025: Fruticultura 2,30% → 15,28% (piora no fold único mas melhora esperada no CV).
 - Resultados salvos em `resultados_benchmark_v6.csv` e `resultados_cv_v6_*.csv`
 
+### 27/05/2026
+- **Limpeza do repositório:** CSVs intermediários `v1`–`v6` removidos; mantidos apenas resultados finais v7 e outputs de seleção.
+- **Ensembles adicionados ao benchmark (v7):** três métodos de combinação avaliados nos dois modos junto aos modelos individuais.
+  - `SimpleAverage`: média simples das previsões dos modelos individuais
+  - `WeightedAverage`: média ponderada pelo inverso do MAPE histórico de cada modelo
+  - `StackingMeta`: Regressão Linear como meta-learner sobre as previsões (requer fold anterior para treino — NaN no fold 2023 por design)
+  - Família registrada como `"Ensemble"` e excluída dos critérios de seleção (não são modelos individuais)
+  - Desempenho: ensembles competitivos no fold 2025 mas instáveis no CV — StackingMeta colapsa em alguns folds por dados insuficientes para o meta-learner
+
+### 23/05/2026
+- **`selection.py` implementado:** seleção estática de modelos sem retreinamento, lendo os CSVs do benchmark.
+  - Três critérios: **MeanMAPE** (menor média histórica), **WeightedMAPE** (pesos 1/3 fold 2023 + 2/3 fold 2024), **StableMAPE** (média + 0,5 × desvio — penaliza instabilidade)
+  - Expanding window estrita: fold 2025 nunca entra na decisão de seleção
+  - Critério de elegibilidade: `n_folds_hist >= 2` — exclui modelos com apenas 1 fold válido (ARIMA falha no fold 2023 por série de treino insuficiente; ARIMA requer mínimo 3 pontos, fold 2023 tem apenas 2)
+  - Output: `resultados_selecao_v2.csv` com modelo eleito, score histórico, MAPE realizado, oracle e regret por (critério, programa, modo)
+  - **WeightedMAPE teve menor regret médio (4,33%)** — acertou o oracle em GLOBAL e Pesca ao dar peso maior ao fold 2024, onde ETS_notrend se destacou; MeanMAPE e StableMAPE erraram em GLOBAL (DecisionTree, regret 53%) por não capturar a melhora recente
+
 ---
 
 ## Problemas e Soluções
@@ -215,4 +232,8 @@ Features de ML na v4: `lag_2`, `lag_3`, `rolling_mean_2`, `trend`, `ano_rel`, `A
 - [x] Visualização comparativa no `modeling.ipynb`
 - [x] Grid search para RandomForest e LightGBM (v7)
 - [x] Renomear "ML Moderno" → "ML baseado em Ensemble"
-- [ ] Redigir seção de metodologia do TCC
+- [x] Adicionar ensembles ao benchmark (SimpleAverage, WeightedAverage, StackingMeta)
+- [x] Implementar seleção estática de modelos (`selection.py`) com 3 critérios
+- [x] Limpar repositório — remover resultados intermediários v1–v6
+- [ ] Atualizar tabelas da tese para resultados v7 (seção de Resultados ainda usa dados v6)
+- [ ] Redigir Referencial Teórico, Resultados/Discussão e Conclusão
